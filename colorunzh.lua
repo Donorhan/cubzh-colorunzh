@@ -501,14 +501,6 @@ function clientSpawnMap(map)
 			local color = teamToColor(shapeData.team)
 			clientUpdateShapeState(shape, color, false)
 		end
-
-		if debug == true then
-			local t = Text()
-			t.Text = index
-			t.Type = TextType.World
-			t:SetParent(shape)
-			t.LocalPosition = { 0, 5, 0 }
-		end
 	end
 end
 
@@ -559,18 +551,20 @@ Client.OnStart = function()
 	-- init music
 	mainMusic = AudioSource()
 	mainMusic:SetParent(Camera)
-	mainMusic.Volume = 0.4
+	mainMusic.Volume = 0.6
 	mainMusic.Loop = true
 
-	local musicURL = "https://raw.githubusercontent.com/Nanskipp/tech-game/main/onitheme.mp3"
-	loadExternalFile(musicURL, function(error, stream)
-		if not error then
-			mainMusic.Sound = stream
-			mainMusic:Play()
-		else
-			print("Failed to load music")
-		end
-	end)
+	if not debug then
+		local musicURL = "https://raw.githubusercontent.com/Donorhan/cubzh-colorunzh/main/shutter-love-waterflame.mp3"
+		loadExternalFile(musicURL, function(error, stream)
+			if not error then
+				mainMusic.Sound = stream
+				mainMusic:Play()
+			else
+				print("Failed to load music")
+			end
+		end)
+	end
 end
 
 Client.Action1 = function()
@@ -956,7 +950,7 @@ function uiShowPlayersPreparationScreen()
 	end
 
 	if mainMusic then
-		mainMusic.Volume = 0.5
+		mainMusic.Volume = 0.7
 	end
 	Pointer:Show()
 
@@ -1027,7 +1021,7 @@ function uiStartCounter()
 	end
 
 	if mainMusic then
-		mainMusic.Volume = 0.6
+		mainMusic.Volume = 0.8
 	end
 	uiDestroyScreens()
 	Pointer:Hide()
@@ -1081,7 +1075,7 @@ function uiShowGameOverScreen()
 	uiDestroyScreens()
 	Pointer:Show()
 	if mainMusic then
-		mainMusic.Volume = 0.4
+		mainMusic.Volume = 0.6
 	end
 	sfx("fireworks_fireworks_child_1", { Volume = 0.75, Pitch = 1.0 })
 
