@@ -76,6 +76,7 @@ local screenMode = false
 local activePowerUps = {}
 local gameCount = 0
 local gameState = GameStates.WAITING_PLAYERS
+local gameStats = { ["teams"] = {}, ["players"] = {} }
 local gameTimeLeft = GameDuration
 local mapShapesContainer = Object()
 local mapState = {}
@@ -213,7 +214,7 @@ function computePlayersStates()
 end
 
 function teamToColor(teamID)
-	local shapeColor = TeamColors.GREY
+	local shapeColor = Color(0, 0, 0, 0)
 	if teamID == 0 then
 		shapeColor = TeamColors.RED
 	elseif teamID == 1 then
@@ -266,6 +267,46 @@ function calculateTeamScores()
 	return sortedTeamScores
 end
 
+function updateGameStats(userID, shapeID)
+	local shapeNewTeamID = playersAssignedTeam[userID]
+	local shapeCurrentTeamID = mapState[userID].team
+
+	if shapeCurrentTeamID ~= nil then
+		shapeCurrentTeamID = tostring(shapeCurrentTeamID)
+	end
+
+	if shapeNewTeamID ~= nil then
+		shapeNewTeamID = tostring(shapeNewTeamID)
+	end
+
+	-- ensures stat objects are not null
+	if shapeCurrentTeamID and not gameStats.teams[shapeCurrentTeamID] then
+		gameStats.teams[shapeCurrentTeamID] = 0
+	end
+
+	if shapeNewTeamID and not gameStats.teams[shapeNewTeamID] then
+		gameStats.teams[shapeNewTeamID] = 0
+	end
+
+	if not gameStats.players[userID] then
+		gameStats.players[userID] = { ["stealer"] = 0, ["amount"] = 0 }
+	end
+
+	-- Player stats
+	if shapeCurrentTeamID then
+		gameStats.players[userID].stealer = gameStats.players[userID].stealer + 1
+	end
+	gameStats.players[userID].amount = gameStats.players[userID].amount + 1
+
+	-- Team stats
+	if shapeCurrentTeamID then
+		gameStats.teams[shapeCurrentTeamID] = gameStats.teams[shapeCurrentTeamID] - 1
+	end
+	if shapeNewTeamID then
+		gameStats.teams[shapeNewTeamID] = gameStats.teams[shapeNewTeamID] + 1
+	end
+end
+
 ------------------------------
 -- Client
 ------------------------------
@@ -310,7 +351,11 @@ end
 function clientSetShapeOwner(shapeID, userID)
 	local userTeamID = playersAssignedTeam[userID]
 	if mapState[shapeID].team == userTeamID then
-		tagComboCounter = 0
+		-- reset combo
+		if userID == Player.UserID then
+			tagComboCounter = 0
+		end
+
 		return
 	end
 
@@ -338,6 +383,7 @@ function clientSetShapeOwner(shapeID, userID)
 		end
 	end
 
+	updateGameStats(userID, shapeID)
 	mapState[shapeID].team = userTeamID
 end
 
@@ -518,6 +564,7 @@ end
 function clientPrepareNewGame()
 	gameState = GameStates.WAITING_PLAYERS
 	playersStates = {}
+	gameStats = { ["teams"] = {}, ["players"] = {} }
 	clientDropPlayer(Player)
 	uiShowPlayersPreparationScreen()
 
@@ -594,7 +641,7 @@ Client.DidReceiveEvent = function(event)
 	if event.action == NetworkEvents.SHAPE_TAG then
 		if event.userID ~= Player.UserID then
 			clientSetShapeOwner(event.shapeID, event.userID)
-		end
+		end		
 	elseif event.action == NetworkEvents.MAP_INIT then
 		clientSpawnMap(JSON:Decode(event.mapState))
 
@@ -736,7 +783,7 @@ function serverSetPlayerTeam(player, removeTeam)
 	end
 
 	if removeTeam then
-		helpers.table.removeKey(playersAssignedTeam, player.UserID)
+	--	playersAssignedTeam[player.UserID] = nil
 		sendEvent()
 		return
 	end
@@ -763,6 +810,7 @@ function serverClearGame()
 	playersStates = {}
 
 	gameState = GameStates.WAITING_PLAYERS
+	gameStats = { ["teams"] = {}, ["players"] = {} }
 	serverNextTeamId = 0
 	serverTimeElapsedSinceLastPowerUp = 0
 	serverNextPowerUpId = 1
@@ -840,6 +888,28 @@ function serverCheckPowerUpSpawn()
 	serverCalculateNextPowerUpIn()
 end
 
+function serverOnShapeTagged(player, shapeID)
+	if gameState ~= GameStates.RUNNING then
+		return
+	end
+
+	if not mapState[shapeID] then
+		return
+	end
+
+	local senderID = player.UserID
+	local senderTeamID = playersAssignedTeam[senderID]
+	mapState[shapeID].owner = senderID
+	mapState[shapeID].team = senderTeamID
+
+	local response = Event()
+	response.action = NetworkEvents.SHAPE_TAG
+	response.shapeID = shapeID
+	response.teamID = senderTeamID
+	response.userID = senderID
+	response:SendTo(Players)
+end
+
 Server.OnStart = function()
 	gameCount = 0
 	serverClearGame()
@@ -850,24 +920,7 @@ Server.DidReceiveEvent = function(event)
 	local senderID = event.Sender.UserID;
 
 	if event.action == NetworkEvents.SHAPE_TAG then
-		if gameState ~= GameStates.RUNNING then
-			return
-		end
-
-		if not mapState[event.shapeID] then
-			return
-		end
-
-		local senderTeamID = playersAssignedTeam[senderID]
-		mapState[event.shapeID].owner = senderID
-		mapState[event.shapeID].team = senderTeamID
-
-		local response = Event()
-		response.action = NetworkEvents.SHAPE_TAG
-		response.shapeID = event.shapeID
-		response.teamID = senderTeamID
-		response.userID = senderID
-		response:SendTo(Players)
+		serverOnShapeTagged(event.Sender, event.shapeID)
 	elseif event.action == NetworkEvents.PLAYER_STATE_CHANGED then
 		serverOnPlayerStateChanged(event.Sender, event.state);
 	elseif event.action == NetworkEvents.PLAYER_ASK_MAP then
@@ -913,9 +966,10 @@ end
 local uiElements = {
 	["hud"] = {
 		frame = nil,
+		leadingTeamFrame = nil,
 		timeLeftText = nil,
 		timeLeftAnimation = nil,
-		previousTimeLeft = 0
+		previousTimeLeft = 0,
 	},
 	["gameOverScreen"] = {
 		frame = nil,
@@ -1034,27 +1088,46 @@ function uiRefreshHUD()
 	if not uiElements.hud.frame then
 		uiDestroyScreens()
 
-		local frame = uikit:createFrame(Color(0, 0, 0, 0.75))
-		frame.Width = 110
-		frame.Height = 80
-		frame.parentDidResize = function()
-			frame.LocalPosition = { Screen.Width / 2 - frame.Width / 2, Screen.Height - frame.Height -
-			Screen.SafeArea.Top - 25 }
+		local mainFrame = uikit:createFrame(Color(0, 0, 0, 0))
+		mainFrame.Width = Screen.Width
+		mainFrame.Height = 100
+		mainFrame.parentDidResize = function()
+			mainFrame.LocalPosition = { 0, Screen.Height - mainFrame.Height - Screen.SafeArea.Top }
 		end
-		frame:parentDidResize()
-		uiElements.hud.frame = frame
+		mainFrame:parentDidResize()
+		uiElements.hud.frame = mainFrame
+
+		local textBackground = uikit:createFrame(Color(0, 0, 0, 0.75))
+		textBackground:setParent(mainFrame)
+		textBackground.Width = 110
+		textBackground.Height = 80
+		textBackground.parentDidResize = function()
+			textBackground.LocalPosition = { mainFrame.Width / 2 - textBackground.Width / 2, mainFrame.Height - textBackground.Height - 25 }
+		end
+		textBackground:parentDidResize()
 
 		local text = uikit:createText("0", Color(255, 255, 255, 255), "big")
-		text:setParent(frame)
+		text:setParent(textBackground)
 		text.object.Anchor = { 0.5, 0.5 }
 		text.parentDidResize = function()
-			text.LocalPosition = { frame.Width / 2, frame.Height / 2 - 2 }
+			text.LocalPosition = { textBackground.Width / 2, textBackground.Height / 2 - 2 }
 		end
 		text.LocalPosition.Z = -1
 		text:parentDidResize()
 		uiElements.hud.timeLeftText = text
+
+		local leandingTeamFrame = uikit:createFrame(Color(255, 0, 0, 255))
+		leandingTeamFrame:setParent(textBackground)
+		leandingTeamFrame.Width = textBackground.Width
+		leandingTeamFrame.Height = 10
+		leandingTeamFrame.parentDidResize = function()
+			leandingTeamFrame.LocalPosition = { 0, -10 }
+		end
+		leandingTeamFrame:parentDidResize()
+		uiElements.hud.leadingTeamFrame = leandingTeamFrame
 	end
 
+	-- time left
 	local timeLeftRounded = math.min(math.max(math.floor(gameTimeLeft + 0.5), 0), GameDuration)
 	if timeLeftRounded ~= previousTimeLeft then
 		if timeLeftRounded < 1 then
@@ -1066,6 +1139,28 @@ function uiRefreshHUD()
 		end
 
 		previousTimeLeft = timeLeftRounded
+	end
+
+	-- show leading team
+	if gameStats.teams ~= nil then
+		local maxScore = 0
+		local leadingTeamID = nil
+		helpers.table.forEach(gameStats.teams, function(teamScore, teamID)
+			if teamScore >= maxScore then
+				leadingTeamID = teamID
+				maxScore = teamScore
+			end
+		end)
+
+		if leadingTeamID == nil then
+			uiElements.hud.leadingTeamFrame.hide()
+		else
+			local teamColor = teamToColor(tonumber(leadingTeamID))
+			uiElements.hud.leadingTeamFrame.Color = teamColor
+			uiElements.hud.leadingTeamFrame.show()
+		end
+	else
+		uiElements.hud.leadingTeamFrame.hide()
 	end
 
 	uiElements.hud.timeLeftText.Text = timeLeftRounded
