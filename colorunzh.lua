@@ -1131,8 +1131,7 @@ function uiRefreshHUD()
 	local timeLeftRounded = math.min(math.max(math.floor(gameTimeLeft + 0.5), 0), GameDuration)
 	if timeLeftRounded ~= previousTimeLeft then
 		if timeLeftRounded < 1 then
-			uiElements.hud.frame.hide()
-			uiElements.hud.timeLeftText.hide()
+			uiElements.hud.frame.IsHidden = true
 		elseif timeLeftRounded <= 5 then
 			sfx("drinking_1", { Volume = 0.75 + (timeLeftRounded / 20), Pitch = 0.8 - (timeLeftRounded / 15) })
 			uiElements.hud.timeLeftText.Color = Color.Red
