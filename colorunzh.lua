@@ -8,10 +8,11 @@ Config = {
 	Map = "dono.brawlarea_1",
 	Items = {
 		"dono.colorimap",
-		"claire.potion",
+		"uevoxel.potion_yellow",
 		"buche.ducky",
 		"yauyau.magic_cube",
 		"wrden.frog_with_hat",
+		"uevoxel.bomb02",
 	}
 }
 
@@ -19,17 +20,18 @@ Config = {
 -- Configuration
 ------------------------------
 local BlocScale = Number3(15.0, 15.0, 15.0)
-local GameDuration = 30 -- in seconds
+local GameDuration = 40 -- in seconds
 local GameStates = { WAITING_PLAYERS = 0, STARTING = 1, RUNNING = 2, ENDED = 3 }
-local MaxTeam = 8
+local GameMode = { SOLO = 0, TEAM = 1 }
 local MaxSoundDistance = 8000
 local NetworkEvents = {
 	GAME_STATE_CHANGED = "game-state",
 	MAP_INIT = "map-init",
-	PLAYER_ASK_MAP = "player-ask-map",
+	PLAYER_ASK_NEW_GAME = "player-ask-new-game",
 	PLAYER_ASSIGN_TEAM = "player-team",
 	PLAYER_KILLED = "player-killed",
 	PLAYER_STATE_CHANGED = "player-state",
+	PLAYER_RELEASE_CHARGE = "player-charge",
 	PLAYERS_INIT = "players-init",
 	POWERUPS_COLLECTED = "powerups-collected",
 	POWERUPS_SPAWN = "powerups-spawn",
@@ -40,17 +42,17 @@ local MapSize = { min = 6, max = 12 }
 local MapCenter = Number3(272, 65, 302)
 local PlayerKilledSource = { LAVA = 1, EXPLOSION = 2 }
 local PlayerDefaultSpeed = 65
+local PlayerState = { READY = 1, WAITING = 0 }
 local PowerUpsSpawnRange = { min = 3, max = 7 }
 local TeamColors = {
-	RED = Color(255, 0, 0, 160),
-	BLUE = Color(0, 0, 255, 160),
-	GREEN = Color(0, 255, 0, 160),
-	YELLOW = Color(255, 255, 0, 160),
-	PINK = Color(255, 0, 255, 160),
-	CYAN = Color(0, 255, 255, 160),
-	ORANGE = Color(255, 128, 0, 160),
-	PURPLE = Color(128, 0, 255, 160),
-	GREY = Color(50, 50, 50, 160),
+	Color(255, 0, 0, 160), -- Red
+	Color(0, 0, 255, 160), -- Blue
+	Color(0, 255, 0, 160), -- Green
+	Color(255, 255, 0, 160), -- Yellow
+	Color(255, 0, 255, 160), -- Pink
+	Color(0, 255, 255, 160), -- Cyan
+	Color(255, 128, 0, 160), -- Orange
+	Color(128, 0, 255, 160), -- Purple
 }
 
 ------------------------------
@@ -72,22 +74,25 @@ end
 -- Common
 ------------------------------
 local debug = false
+local disableMusic = false
 local screenMode = false
 local activePowerUps = {}
 local gameCount = 0
+local gameMode = GameMode.SOLO
 local gameState = GameStates.WAITING_PLAYERS
 local gameStats = { ["teams"] = {}, ["players"] = {} }
 local gameTimeLeft = GameDuration
 local mapShapesContainer = Object()
 local mapState = {}
+local playerCharge = 0
 local playerSpeed = PlayerDefaultSpeed
 local playersAssignedTeam = {}
 local playersStates = {}
 local PowerUps = {
 	-- Add a temporary speed to the player
 	["playerSpeed"] = {
-		model = Items.claire.potion,
-		modelScale = Number3(0.5, 0.5, 0.5),
+		model = Items.uevoxel.potion_yellow,
+		modelScale = Number3(0.35, 0.35, 0.35),
 		modelPosition = Number3(0, 0, -0.5),
 		value = PlayerDefaultSpeed + 35,
 		duration = 5, -- in seconds
@@ -151,7 +156,7 @@ local PowerUps = {
 			Player.Velocity = -Player.Forward * 3000
 			Player.canMove = false
 
-			Timer(0.500, function()
+			Timer(0.500, false, function()
 				Player.canMove = true
 			end)
 		end,
@@ -186,7 +191,7 @@ local PowerUps = {
 					shape.LocalPosition = Number3(26, -12.5, 0)
 				end
 
-				Timer(5, function()
+				Timer(5, false, function()
 					shape:RemoveFromParent()
 				end)
 			end
@@ -198,9 +203,21 @@ local tagComboCounter = 0
 function computePlayersStates()
 	local playersCount = 0
 	local playersReadyCount = 0
-	for id, player in pairs(Players) do
-		if playersStates[player.UserID] == 1 then
-			playersReadyCount = playersReadyCount + 1
+	local soloModeVote = 0
+	local teamModeVote = 0
+
+	for _, player in pairs(Players) do
+		local playerState = playersStates[player.UserID]
+		if playerState then
+			if playerState.state == PlayerState.READY then
+				playersReadyCount = playersReadyCount + 1
+			end
+
+			if playerState.vote == GameMode.SOLO then
+				soloModeVote = soloModeVote + 1
+			elseif playerState.vote == GameMode.TEAM then
+				teamModeVote = teamModeVote + 1
+			end
 		end
 
 		playersCount = playersCount + 1
@@ -209,31 +226,14 @@ function computePlayersStates()
 	return {
 		playersCount = playersCount,
 		playersReadyCount = playersReadyCount,
+		soloModeVote = soloModeVote,
+		teamModeVote = teamModeVote,
 		ready = (playersCount == playersReadyCount)
 	}
 end
 
 function teamToColor(teamID)
-	local shapeColor = Color(0, 0, 0, 0)
-	if teamID == 0 then
-		shapeColor = TeamColors.RED
-	elseif teamID == 1 then
-		shapeColor = TeamColors.BLUE
-	elseif teamID == 2 then
-		shapeColor = TeamColors.GREEN
-	elseif teamID == 3 then
-		shapeColor = TeamColors.YELLOW
-	elseif teamID == 4 then
-		shapeColor = TeamColors.PINK
-	elseif teamID == 5 then
-		shapeColor = TeamColors.CYAN
-	elseif teamID == 6 then
-		shapeColor = TeamColors.ORANGE
-	elseif teamID == 7 then
-		shapeColor = TeamColors.PURPLE
-	end
-
-	return shapeColor
+	return TeamColors[teamID] or Color(0, 0, 0, 0)
 end
 
 function calculateTeamScores()
@@ -310,6 +310,16 @@ end
 ------------------------------
 -- Client
 ------------------------------
+function togglePlayersUserNames(show)
+	for id, player in pairs(Players) do
+		if show then
+			player:ShowHandle()
+		else
+			player:HideHandle()
+		end
+	end
+end
+
 function clientUpdateShapeState(shape, color, animate)
 	local thickness = 0.1
 	if not shape.spawnedShape then
@@ -348,6 +358,15 @@ function clientUpdateShapeState(shape, color, animate)
 	end
 end
 
+function clientUpdatePlayerCharge(value)
+	playerCharge = playerCharge + value
+	playerCharge = helpers.math.clamp(playerCharge, 0, 100)
+
+	if playerCharge >= 100 then
+		clientReleasePlayerCharge()
+	end
+end
+
 function clientSetShapeOwner(shapeID, userID)
 	local userTeamID = playersAssignedTeam[userID]
 	if mapState[shapeID].team == userTeamID then
@@ -373,6 +392,8 @@ function clientSetShapeOwner(shapeID, userID)
 		e:SendTo(Server)
 		sfx("waterdrop_2", { Position = shapePosition, Pitch = pitch, Volume = 0.65 })
 		Client:HapticFeedback()
+
+		clientUpdatePlayerCharge(1 * (tagComboCounter / 2))
 		tagComboCounter = tagComboCounter + 1
 	else
 		-- avoid audio spam with players far away
@@ -481,6 +502,190 @@ function clientDisablePlayer(value)
 	Player.canMove = value
 end
 
+local easeColorLinear = function(shape, startColor, color, duration, paletteIndexes)
+	if shape.easeColor then
+		ease:cancel(shape.easeColor)
+	end
+
+	local startColors = {}
+	for _, index in ipairs(paletteIndexes or { 1 }) do
+		startColors[index] = startColor or shape.Palette[index].Color
+	end
+
+	local conf = {
+		onUpdate = function(obj)
+			for _, index in ipairs(paletteIndexes or { 1 }) do
+				shape.Palette[index].Color:Lerp(startColors[index], color, obj.easeLerp)
+			end
+		end
+	}
+
+	shape.easeLerp = 0.0
+	shape.easeColor = ease:linear(shape, duration, conf)
+	shape.easeColor.easeLerp = 1.0
+end
+
+function clientSpawnBomb(endPosition, teamID)
+	sfx("drinking_1", { Position = endPosition, Pitch = 0.8 + (math.random(1, 3) / 10.0), Volume = 0.7 })
+
+	local color = teamToColor(teamID) or Color(255, 255, 255, 255)
+
+	local bomb = Shape(Items.uevoxel.bomb02)
+	bomb.Physics = PhysicsMode.Disabled
+	bomb.Scale = Number3(0.5, 0.5, 0.5)
+	bomb.CollisionGroups = Player.CollisionGroups
+	mapShapesContainer:AddChild(bomb)
+	bomb.Position = endPosition + Number3(0, 5, 0)
+	bomb.Palette[1].Color = color
+
+	local velocity = 100
+	local acceleration = Config.ConstantAcceleration.Y
+	local updateBomb = true
+	bomb.Tick = function(o, dt)
+		if not updateBomb then
+			bomb.Position.Y = endPosition.Y
+			return
+		end
+
+		local bombPosition = o.Position
+
+		bombPosition.Y = bombPosition.Y + (dt * (velocity + dt * acceleration / 2))
+		velocity = velocity + (dt * acceleration);
+
+		if bombPosition.Y < endPosition.Y then
+			velocity = -velocity * 0.5
+			bomb.Position.Y = endPosition.Y
+			if velocity > 10 then
+				sfx("drinking_1", { Position = endPosition, Pitch = 0.3, Volume = 0.35 })
+			end
+
+			if velocity < 0.55 then
+				updateBomb = false
+			end
+		end
+	end
+
+	-- animations
+	bomb.anim = function()
+		ease:inOutSine(bomb, 0.2, {
+			onDone = function()
+				ease:inOutSine(bomb, 0.2, {
+					onDone = function()
+						bomb.anim()
+					end,
+				}).Scale = Number3(0.5, 0.48, 0.4)
+			end,
+		}).Scale = Number3(0.4, 0.52, 0.5)
+	end
+	bomb.anim()
+
+	-- particles
+	local bombParticles = particles:newEmitter({
+		life = function()
+			return 0.25
+		end,
+		velocity = function()
+			return Number3(5 * math.random(-1, 1), math.random(5, 9), 5 * math.random(-1, 1))
+		end,
+		color = function()
+			return Color(255, math.random(0, 100), 0)
+		end,
+		scale = function()
+			return 0.75
+		end,
+		acceleration = function()
+			return -Config.ConstantAcceleration
+		end,
+	})
+	bomb:AddChild(bombParticles)
+	bombParticles.Position = bomb.Position - Number3(1, -3.8, 0)
+
+	local t = 0.0
+	local spawnDt = 0.05
+	bombParticles.Tick = function(o, dt)
+		t = t + dt
+		while t > spawnDt do
+			t = t - spawnDt
+			bombParticles:spawn(2)
+		end
+	end
+
+	-- will explode animation
+	local explosionSize = 70
+	Timer(3, false, function()
+		easeColorLinear(bomb, nil, Color.Red, 1.5, { 1, 2, 3, 4, 5, 6, 7 })
+		Timer(1, false, function()
+			bomb:RemoveFromParent()
+			bombParticles:RemoveFromParent()
+			sfx("small_explosion_3", { Position = bomb.Position, Pitch = 1.0, Volume = 0.75 })
+
+			local explosionArea = MutableShape()
+			explosionArea:AddBlock(Color(255, 255, 255, 255), Number3.Zero)
+			explosionArea.Position = bomb.LocalPosition - explosionSize / 2.0
+			explosionArea.Scale = explosionSize
+			explosionArea.Physics = PhysicsMode.Trigger
+			explosionArea.CollisionGroups = { 9 }
+			explosionArea.CollidesWithGroups = Player.CollisionGroups
+			explosionArea.OnCollisionBegin = function(_, other)
+				if other.UserID and not other.isDead then
+					if teamID ~= playersAssignedTeam[other.UserID] then
+						onPlayerKilled(other, PlayerKilledSource.EXPLOSION)
+					end
+				end
+			end
+			mapShapesContainer:AddChild(explosionArea)
+
+			-- particles
+			local explosionParticles = particles:newEmitter({
+				life = function()
+					return 0.35
+				end,
+				velocity = function()
+					return Number3(90 * math.random(-1, 1), math.random(0, 120), 90 * math.random(-1, 1))
+				end,
+				color = function()
+					return Color(255, math.random(0, 100), 0)
+				end,
+				scale = function()
+					return math.random(4, 7)
+				end,
+				acceleration = function()
+					return -Config.ConstantAcceleration
+				end,
+			})
+			mapShapesContainer:AddChild(explosionParticles)
+			explosionParticles.Position = endPosition
+			explosionParticles:spawn(30)
+
+			Timer(0.01, false, function()
+				explosionArea:RemoveFromParent()
+			end)
+
+			Timer(0.5, false, function()
+				explosionParticles:RemoveFromParent()
+			end)
+		end)
+	end)
+end
+
+function clientReleasePlayerCharge()
+	--if gameState ~= GameStates.RUNNING or playerCharge < 100 then
+	--	return
+	--end
+
+	-- reset charge
+	playerCharge = 0
+
+	-- animation
+	local bombPosition = Number3(Player.Position.X, mapShapesContainer.Position.Y + 4.5, Player.Position.Z)
+	clientSpawnBomb(bombPosition, playersAssignedTeam[Player.UserID])
+
+	local event = Event()
+	event.action = NetworkEvents.PLAYER_RELEASE_CHARGE
+	event.position = bombPosition
+	event:SendTo(Players)
+end
+
 function onPlayerKilled(player, sourceType)
 	player.IsHidden = true
 	player.isDead = true
@@ -496,6 +701,8 @@ function onPlayerKilled(player, sourceType)
 
 	if sourceType == PlayerKilledSource.LAVA then
 		sfx("punch_2", { Position = player.Position, Pitch = 0.3, Volume = 0.7 })
+	elseif sourceType == PlayerKilledSource.EXPLOSION then
+		-- do nothing, explosion's sound is enough
 	else
 		sfx("punch_2", { Position = player.Position, Pitch = 0.7, Volume = 0.7 })
 	end
@@ -563,14 +770,13 @@ end
 
 function clientPrepareNewGame()
 	gameState = GameStates.WAITING_PLAYERS
-	playersStates = {}
 	gameStats = { ["teams"] = {}, ["players"] = {} }
+	playerCharge = 0
 	clientDropPlayer(Player)
 	uiShowPlayersPreparationScreen()
 
 	local e = Event()
-	e.action = NetworkEvents.PLAYER_ASK_MAP
-	e.shapeID = shapeID
+	e.action = NetworkEvents.PLAYER_ASK_NEW_GAME
 	e:SendTo(Server)
 end
 
@@ -598,7 +804,11 @@ Client.OnStart = function()
 	-- init music
 	mainMusic = AudioSource()
 	mainMusic:SetParent(Camera)
-	mainMusic.Volume = 0.6
+	if not disableMusic then
+		mainMusic.Volume = 0.4
+	else
+		mainMusic.Volume = 0
+	end
 	mainMusic.Loop = true
 
 	if not debug then
@@ -627,6 +837,7 @@ Client.Tick = function(dt)
 
 	if gameState == GameStates.RUNNING then
 		gameTimeLeft = gameTimeLeft - dt
+		clientUpdatePlayerCharge(6 * dt)
 		uiRefreshHUD()
 	end
 end
@@ -641,7 +852,7 @@ Client.DidReceiveEvent = function(event)
 	if event.action == NetworkEvents.SHAPE_TAG then
 		if event.userID ~= Player.UserID then
 			clientSetShapeOwner(event.shapeID, event.userID)
-		end		
+		end
 	elseif event.action == NetworkEvents.MAP_INIT then
 		clientSpawnMap(JSON:Decode(event.mapState))
 
@@ -652,11 +863,15 @@ Client.DidReceiveEvent = function(event)
 		playersAssignedTeam = JSON:Decode(event.state)
 		uiShowPlayersPreparationScreen()
 	elseif event.action == NetworkEvents.PLAYER_STATE_CHANGED then
-		playersStates[event.userID] = event.state
+		playersStates = JSON:Decode(event.state)
 		uiShowPlayersPreparationScreen()
 	elseif event.action == NetworkEvents.PLAYER_KILLED then
 		if event.Sender ~= Player then
 			onPlayerKilled(event.Sender, event.source)
+		end
+	elseif event.action == NetworkEvents.PLAYER_RELEASE_CHARGE then
+		if event.Sender ~= Player then
+			clientSpawnBomb(event.position, playersAssignedTeam[event.Sender.UserID])
 		end
 	elseif event.action == NetworkEvents.GAME_STATE_CHANGED then
 		gameState = event.state
@@ -676,6 +891,14 @@ Client.DidReceiveEvent = function(event)
 	elseif event.action == NetworkEvents.POWERUPS_COLLECTED then
 		clientRemovePowerUp(event.powerUpID, event.userID)
 	end
+end
+
+Client.OnPlayerJoin = function(player)
+	if gameState == GameStates.WAITING_PLAYERS then
+		uiShowPlayersPreparationScreen()
+	end
+
+	togglePlayersUserNames(false)
 end
 
 Client.OnPlayerLeave = function(player)
@@ -710,14 +933,12 @@ end
 ------------------------------
 -- Server code
 ------------------------------
-local serverNextTeamId = 0
 local serverTimeElapsedSinceLastPowerUp = 0
 local serverNextPowerUpIn = 0
 local serverNextPowerUpId = 1
 local serverMapSize = { x = 0, z = 0 }
 
 
--- note: simple map for now
 function serverPrepareMap()
 	for index in pairs(mapState) do
 		mapState[index] = nil
@@ -774,33 +995,58 @@ function serverSendMapState(player)
 	e:SendTo(Players[player.ID])
 end
 
+function serverSendPlayersAssignedTeams()
+	local e = Event()
+	e.action = NetworkEvents.PLAYERS_INIT
+	e.state = JSON:Encode(playersAssignedTeam)
+	e:SendTo(Players)
+end
+
 function serverSetPlayerTeam(player, removeTeam)
-	local sendEvent = function()
-		local e = Event()
-		e.action = NetworkEvents.PLAYERS_INIT
-		e.state = JSON:Encode(playersAssignedTeam)
-		e:SendTo(Players)
-	end
-
 	if removeTeam then
-	--	playersAssignedTeam[player.UserID] = nil
-		sendEvent()
+		playersAssignedTeam[player.UserID] = nil
 		return
 	end
 
-	if playersAssignedTeam[player.UserID] then
-		sendEvent()
-		return
+	local getUsersPerTeam = function()
+		local usersPerTeam = {}
+
+		local teamCount = 0
+		for _ in pairs(TeamColors) do
+			teamCount = teamCount + 1
+		end
+
+		for i = 0, teamCount do
+			usersPerTeam[i] = 0
+		end
+
+		for index, value in pairs(playersAssignedTeam) do
+			usersPerTeam[value] = usersPerTeam[value] + 1
+		end
+
+		return usersPerTeam
 	end
 
-	local teamId = serverNextTeamId
-	playersAssignedTeam[player.UserID] = teamId
-	sendEvent()
+	local findTeamWithLessUsers = function(usersPerTeam, teamLimit)
+		local userCount = 99
+		local selectedTeamID = 0
+		for index, value in pairs(usersPerTeam) do
+			if index < teamLimit and value < userCount then
+				selectedTeamID = index
+				userCount = value
+			end
+		end
 
-	serverNextTeamId = serverNextTeamId + 1
-	if serverNextTeamId >= MaxTeam then
-		serverNextTeamId = 0
+		return selectedTeamID
 	end
+
+	local teamLimit = 99
+	if gameMode == GameMode.TEAM then
+		teamLimit = 2
+	end
+
+	local selectedTeamID = findTeamWithLessUsers(getUsersPerTeam(), teamLimit)
+	playersAssignedTeam[player.UserID] = selectedTeamID
 end
 
 function serverClearGame()
@@ -811,25 +1057,39 @@ function serverClearGame()
 
 	gameState = GameStates.WAITING_PLAYERS
 	gameStats = { ["teams"] = {}, ["players"] = {} }
-	serverNextTeamId = 0
 	serverTimeElapsedSinceLastPowerUp = 0
 	serverNextPowerUpId = 1
+	playersAssignedTeam = {}
 	serverCalculateNextPowerUpIn()
+end
+
+function serverSendPlayersStates()
+	local e = Event()
+	e.action = NetworkEvents.PLAYER_STATE_CHANGED
+	e.state = JSON:Encode(playersStates)
+	e:SendTo(Players)
 end
 
 function serverOnPlayerStateChanged(player, state)
 	playersStates[player.UserID] = state
-	local playersStates = computePlayersStates()
+	serverSendPlayersStates()
 
-	local e = Event()
-	e.action = NetworkEvents.PLAYER_STATE_CHANGED
-	e.userID = player.UserID
-	e.state = state
-	e:SendTo(Players)
-
-	if playersStates.ready == true then
+	local computedStates = computePlayersStates()
+	if computedStates.ready == true then
 		gameState = GameStates.STARTING
 		gameTimeLeft = GameDuration + 3 -- + 3 for the countdown, yeah it's dirty
+
+		-- set game mode
+		gameMode = GameMode.SOLO
+		if computedStates.teamModeVote > computedStates.soloModeVote then
+			gameMode = GameMode.TEAM
+		end
+
+		-- assign teams depending votes
+		for _, player in pairs(Players) do
+			serverSetPlayerTeam(player)
+		end
+		serverSendPlayersAssignedTeams()
 
 		Timer(1, false, function()
 			local e = Event()
@@ -922,9 +1182,10 @@ Server.DidReceiveEvent = function(event)
 	if event.action == NetworkEvents.SHAPE_TAG then
 		serverOnShapeTagged(event.Sender, event.shapeID)
 	elseif event.action == NetworkEvents.PLAYER_STATE_CHANGED then
-		serverOnPlayerStateChanged(event.Sender, event.state);
-	elseif event.action == NetworkEvents.PLAYER_ASK_MAP then
+		serverOnPlayerStateChanged(event.Sender, { ["state"] = event.state, ["vote"] = event.vote });
+	elseif event.action == NetworkEvents.PLAYER_ASK_NEW_GAME then
 		serverSendMapState(event.Sender)
+		serverSendPlayersStates()
 	elseif event.action == NetworkEvents.POWERUPS_COLLECTED then
 		local response = Event()
 		response.powerUpID = event.powerUpID
@@ -935,7 +1196,10 @@ Server.DidReceiveEvent = function(event)
 end
 
 Server.OnPlayerJoin = function(player)
-	serverSetPlayerTeam(player)
+	if gameState == GameStates.RUNNING then
+		serverSetPlayerTeam(player)
+		serverSendPlayersAssignedTeams()
+	end
 	serverSendMapState(player)
 
 	local e = Event()
@@ -947,7 +1211,7 @@ end
 
 Server.OnPlayerLeave = function(player)
 	serverSetPlayerTeam(player, true)
-	serverOnPlayerStateChanged(player, 0);
+	serverOnPlayerStateChanged(player, nil);
 end
 
 Server.Tick = function(dt)
@@ -966,26 +1230,25 @@ end
 local uiElements = {
 	["hud"] = {
 		frame = nil,
+		subFrame = nil,
 		leadingTeamFrame = nil,
 		timeLeftText = nil,
-		timeLeftAnimation = nil,
 		previousTimeLeft = 0,
 	},
 	["gameOverScreen"] = {
 		frame = nil,
-		subFrame = nil,
 	},
 	["playersPreparationScreen"] = {
 		frame = nil,
-		subFrame = nil,
-		text = nil,
-		button = nil,
+		playersCountText = nil,
+		soloButton = nil,
+		teamButton = nil,
 	},
 }
 
 
 function uiDestroyScreens()
-	for key, screen in pairs(uiElements) do
+	for _, screen in pairs(uiElements) do
 		if screen.frame then
 			screen.frame:remove()
 			screen.frame = nil
@@ -1003,22 +1266,36 @@ function uiShowPlayersPreparationScreen()
 		return
 	end
 
-	if mainMusic then
-		mainMusic.Volume = 0.7
+	if mainMusic and not disableMusic then
+		mainMusic.Volume = 0.5
 	end
 	Pointer:Show()
 
-	local updateText = function(text)
+	local updateTexts = function()
 		local playersStates = computePlayersStates()
-		text.Text = "Players ready: " .. playersStates.playersReadyCount .. " / " .. playersStates.playersCount
+		uiElements.playersPreparationScreen.playersCountText.Text = playersStates.playersReadyCount ..
+			" / " .. playersStates.playersCount
+		uiElements.playersPreparationScreen.soloButton.Text = "Solo (" .. playersStates.soloModeVote .. ")"
+		uiElements.playersPreparationScreen.teamButton.Text = "Team (" .. playersStates.teamModeVote .. ")"
 	end
 
 	if not uiElements.playersPreparationScreen.frame then
 		uiDestroyScreens()
 
-		local frame = uikit:createFrame(Color(20, 20, 20, 255))
+		local onVoteButtonPressed = function(mode)
+			local e = Event()
+			e.action = NetworkEvents.PLAYER_STATE_CHANGED
+			e.state = PlayerState.READY
+			e.vote = mode
+			e:SendTo(Server)
+
+			uiElements.playersPreparationScreen.soloButton:disable()
+			uiElements.playersPreparationScreen.teamButton:disable()
+		end
+
+		local frame = uikit:createFrame(Color(42, 50, 61))
 		frame.Width = 350
-		frame.Height = 120
+		frame.Height = 150
 		frame.parentDidResize = function()
 			frame.LocalPosition = { Screen.Width / 2 - frame.Width / 2, Screen.Height - frame.Height -
 			Screen.SafeArea.Top - 25 }
@@ -1026,47 +1303,68 @@ function uiShowPlayersPreparationScreen()
 		frame:parentDidResize()
 		uiElements.playersPreparationScreen.frame = frame
 
-		local subFrame = uikit:createFrame(Color(60, 60, 60, 128))
-		subFrame.Width = 375
-		subFrame.Height = 150
-		subFrame.parentDidResize = function()
-			subFrame.LocalPosition = { Screen.Width / 2 - subFrame.Width / 2, Screen.Height - frame.Height -
-			Screen.SafeArea.Top - 40 }
+		-- header
+		local titleFrame = uikit:createFrame(Color(27, 36, 43))
+		titleFrame:setParent(frame)
+		titleFrame.Width = 348
+		titleFrame.Height = 45
+		titleFrame.parentDidResize = function()
+			titleFrame.LocalPosition = { frame.Width / 2 - titleFrame.Width / 2, frame.Height - titleFrame.Height - 1 }
 		end
-		subFrame:parentDidResize()
-		uiElements.playersPreparationScreen.subFrame = subFrame
+		titleFrame:parentDidResize()
 
-		local text = uikit:createText("initializing …", Color.White, "default")
-		text:setParent(frame)
-		text.object.Anchor = { 0.5, 1 }
+		local text = uikit:createText("Ready?", Color(203, 206, 209), "default")
+		text:setParent(titleFrame)
+		text.object.Anchor = { 0, 0.5 }
 		text.parentDidResize = function()
-			text.LocalPosition = { frame.Width / 2, frame.Height - text.Height / 2 - 15 }
+			text.LocalPosition = { 15, titleFrame.Height / 2 }
 		end
 		text:parentDidResize()
-		updateText(text)
-		uiElements.playersPreparationScreen.text = text
 
-		local readyButton = uikit:createButton("I'm ready")
-		readyButton.Width = 275
-		readyButton:setColor(Color(0, 204, 255), Color.White)
-		readyButton:setParent(frame)
-		readyButton.Anchor = { 0.5, 0 }
-		readyButton.parentDidResize = function()
-			readyButton.LocalPosition = { frame.Width / 2 - readyButton.Width / 2, 15 }
+		local playersCountText = uikit:createText("0 / 0", Color(203, 206, 209), "small")
+		playersCountText:setParent(titleFrame)
+		playersCountText.object.Anchor = { 1, 0.5 }
+		playersCountText.parentDidResize = function()
+			playersCountText.LocalPosition = { titleFrame.Width - 15, titleFrame.Height / 2 }
 		end
-		readyButton:parentDidResize()
-		readyButton.onRelease = function()
-			local e = Event()
-			e.action = NetworkEvents.PLAYER_STATE_CHANGED
-			e.state = 1
-			e:SendTo(Server)
-			readyButton:disable()
+		playersCountText:parentDidResize()
+		uiElements.playersPreparationScreen.playersCountText = playersCountText
+
+		local voteText = uikit:createText("Vote for the mode", Color(109, 119, 131), "default")
+		voteText:setParent(frame)
+		voteText.object.Anchor = { 0.5, 0.5 }
+		voteText.parentDidResize = function()
+			voteText.LocalPosition = { frame.Width / 2, frame.Height - titleFrame.Height - 27 }
 		end
-		uiElements.playersPreparationScreen.button = readyButton
+		voteText:parentDidResize()
+
+		local soloButton = uikit:createButton("Solo (0)")
+		soloButton.Width = 152.5
+		soloButton:setColor(Color(0, 129, 213), Color.White)
+		soloButton:setParent(frame)
+		soloButton.Anchor = { 0, 0 }
+		soloButton.parentDidResize = function()
+			soloButton.LocalPosition = { 15, 15 }
+		end
+		soloButton:parentDidResize()
+		soloButton.onRelease = function() onVoteButtonPressed(GameMode.SOLO) end
+		uiElements.playersPreparationScreen.soloButton = soloButton
+
+		local teamButton = uikit:createButton("Team (0)")
+		teamButton.Width = 152.5
+		teamButton:setColor(Color(0, 129, 213), Color.White)
+		teamButton:setParent(frame)
+		teamButton.Anchor = { 1, 0 }
+		teamButton.parentDidResize = function()
+			teamButton.LocalPosition = { frame.Width - teamButton.Width - 15, 15 }
+		end
+		teamButton:parentDidResize()
+		teamButton.onRelease = function() onVoteButtonPressed(GameMode.TEAM) end
+		uiElements.playersPreparationScreen.teamButton = teamButton
 	end
 
 	uiElements.playersPreparationScreen.frame:show()
-	updateText(uiElements.playersPreparationScreen.text)
+	updateTexts()
 end
 
 function uiStartCounter()
@@ -1074,8 +1372,8 @@ function uiStartCounter()
 		return
 	end
 
-	if mainMusic then
-		mainMusic.Volume = 0.8
+	if mainMusic and not disableMusic then
+		mainMusic.Volume = 0.6
 	end
 	uiDestroyScreens()
 	Pointer:Hide()
@@ -1088,25 +1386,28 @@ function uiRefreshHUD()
 	if not uiElements.hud.frame then
 		uiDestroyScreens()
 
+		local leadingTeamFrameHeight = 6
+
 		local mainFrame = uikit:createFrame(Color(0, 0, 0, 0))
 		mainFrame.Width = Screen.Width
-		mainFrame.Height = 100
+		mainFrame.Height = 75
 		mainFrame.parentDidResize = function()
 			mainFrame.LocalPosition = { 0, Screen.Height - mainFrame.Height - Screen.SafeArea.Top }
 		end
 		mainFrame:parentDidResize()
 		uiElements.hud.frame = mainFrame
 
-		local textBackground = uikit:createFrame(Color(0, 0, 0, 0.75))
+		local textBackground = uikit:createFrame(Color(42, 50, 61, 0.75))
 		textBackground:setParent(mainFrame)
 		textBackground.Width = 110
-		textBackground.Height = 80
+		textBackground.Height = 45
 		textBackground.parentDidResize = function()
-			textBackground.LocalPosition = { mainFrame.Width / 2 - textBackground.Width / 2, mainFrame.Height - textBackground.Height - 25 }
+			textBackground.LocalPosition = { mainFrame.Width / 2 - textBackground.Width / 2, mainFrame.Height -
+			textBackground.Height - 15 }
 		end
 		textBackground:parentDidResize()
 
-		local text = uikit:createText("0", Color(255, 255, 255, 255), "big")
+		local text = uikit:createText("0", Color(255, 255, 255, 255), "default")
 		text:setParent(textBackground)
 		text.object.Anchor = { 0.5, 0.5 }
 		text.parentDidResize = function()
@@ -1116,15 +1417,38 @@ function uiRefreshHUD()
 		text:parentDidResize()
 		uiElements.hud.timeLeftText = text
 
-		local leandingTeamFrame = uikit:createFrame(Color(255, 0, 0, 255))
-		leandingTeamFrame:setParent(textBackground)
-		leandingTeamFrame.Width = textBackground.Width
-		leandingTeamFrame.Height = 10
-		leandingTeamFrame.parentDidResize = function()
-			leandingTeamFrame.LocalPosition = { 0, -10 }
+		local leadingTeamFrame = uikit:createFrame(Color(255, 0, 0, 255))
+		leadingTeamFrame:setParent(textBackground)
+		leadingTeamFrame.Width = textBackground.Width
+		leadingTeamFrame.Height = leadingTeamFrameHeight
+		leadingTeamFrame.parentDidResize = function()
+			leadingTeamFrame.LocalPosition = { 0, -leadingTeamFrame.Height }
 		end
-		leandingTeamFrame:parentDidResize()
-		uiElements.hud.leadingTeamFrame = leandingTeamFrame
+		leadingTeamFrame:parentDidResize()
+		uiElements.hud.leadingTeamFrame = leadingTeamFrame
+
+		local playerChargeHeight = Screen.Height / 2
+		local playerChargeFrame = uikit:createFrame(Color(42, 50, 61, 0.75))
+		playerChargeFrame.Width = 15
+		playerChargeFrame.Height = playerChargeHeight
+		playerChargeFrame.parentDidResize = function()
+			playerChargeFrame.LocalPosition = { Screen.Width - playerChargeFrame.Width - 15, Screen.Height / 2 -
+			playerChargeFrame.Height / 2 }
+		end
+		playerChargeFrame.Anchor = { 0.5, 0 }
+		playerChargeFrame:parentDidResize()
+		uiElements.hud.subFrame = playerChargeFrame
+
+		local playerCharge = uikit:createFrame(Color(255, 50, 61, 0.75))
+		playerCharge:setParent(playerChargeFrame)
+		playerCharge.Width = playerChargeFrame.Width - 4
+		playerCharge.Height = playerChargeFrame.Height - 4 - 50
+		playerCharge.parentDidResize = function()
+			playerCharge.LocalPosition = { 2, 2 }
+		end
+		playerCharge.Anchor = { 0.5, 0 }
+		playerCharge:parentDidResize()
+		uiElements.hud.playerCharge = playerCharge
 	end
 
 	-- time left
@@ -1139,81 +1463,72 @@ function uiRefreshHUD()
 
 		previousTimeLeft = timeLeftRounded
 	end
+	uiElements.hud.timeLeftText.Text = timeLeftRounded
 
 	-- show leading team
 	if gameStats.teams ~= nil then
 		local maxScore = 0
 		local leadingTeamID = nil
 		helpers.table.forEach(gameStats.teams, function(teamScore, teamID)
-			if teamScore >= maxScore then
+			if teamScore > maxScore then
 				leadingTeamID = teamID
 				maxScore = teamScore
 			end
 		end)
 
-		if leadingTeamID == nil then
-			uiElements.hud.leadingTeamFrame.hide()
+		if leadingTeamID == nil or maxScore == 0 then
+			uiElements.hud.leadingTeamFrame.IsHidden = true
 		else
 			local teamColor = teamToColor(tonumber(leadingTeamID))
 			uiElements.hud.leadingTeamFrame.Color = teamColor
-			uiElements.hud.leadingTeamFrame.show()
+			uiElements.hud.leadingTeamFrame.IsHidden = false
 		end
 	else
 		uiElements.hud.leadingTeamFrame.hide()
 	end
 
-	uiElements.hud.timeLeftText.Text = timeLeftRounded
+	-- update player's charge
+	uiElements.hud.playerCharge.Height = helpers.math.remap(playerCharge, 0, 100, 0, uiElements.hud.subFrame.Height - 4)
 end
 
 function uiShowGameOverScreen()
 	uiDestroyScreens()
 	Pointer:Show()
-	if mainMusic then
-		mainMusic.Volume = 0.6
+	if mainMusic and not disableMusic then
+		mainMusic.Volume = 0.4
 	end
 	sfx("fireworks_fireworks_child_1", { Volume = 0.75, Pitch = 1.0 })
 
 	if not uiElements.gameOverScreen.frame then
-		local frame = uikit:createFrame(Color(20, 20, 20, 255))
+		local frame = uikit:createFrame(Color(42, 50, 61))
 		frame.Width = 400
-		frame.Height = 450
 		frame.parentDidResize = function()
-			frame.LocalPosition = { Screen.Width / 2 - frame.Width / 2, Screen.Height / 2 - frame.Height / 2 }
+			frame.LocalPosition = { Screen.Width / 2 - frame.Width / 2, Screen.Height / 2 - frame.Height / 2 -
+			Screen.SafeArea.Top }
 		end
 		frame:parentDidResize()
 		uiElements.gameOverScreen.frame = frame
 
-		local subFrame = uikit:createFrame(Color(60, 60, 60, 128))
-		subFrame.Width = 425
-		subFrame.Height = 475
-		subFrame.LocalPosition.Z = -1
-		subFrame.parentDidResize = function()
-			subFrame.LocalPosition = { Screen.Width / 2 - subFrame.Width / 2, Screen.Height / 2 - subFrame.Height / 2 }
+		-- header
+		local titleFrame = uikit:createFrame(Color(27, 36, 43))
+		titleFrame:setParent(frame)
+		titleFrame.Width = 398
+		titleFrame.Height = 45
+		titleFrame.parentDidResize = function()
+			titleFrame.LocalPosition = { frame.Width / 2 - titleFrame.Width / 2, frame.Height - titleFrame.Height - 1 }
 		end
-		subFrame:parentDidResize()
-		uiElements.gameOverScreen.subFrame = subFrame
+		titleFrame:parentDidResize()
 
-		local separator = uikit:createFrame(Color(70, 70, 70, 255))
-		separator:setParent(frame)
-		separator.Width = frame.Width - 50
-		separator.Height = 2
-		separator.object.Anchor = { 0.5, 0.5 }
-		separator.parentDidResize = function()
-			separator.LocalPosition = { separator.Width / 2 + 50 / 2, frame.Height - 65 }
-		end
-		separator:parentDidResize()
-
-		local text = uikit:createText("Results", Color(235, 235, 235), "big")
-		text:setParent(frame)
-		text.LocalPosition.Z = -1
-		text.object.Anchor = { 0.5, 0.5 }
+		local text = uikit:createText("Results", Color(203, 206, 209), "default")
+		text:setParent(titleFrame)
+		text.object.Anchor = { 0, 0.5 }
 		text.parentDidResize = function()
-			text.LocalPosition = { frame.Width / 2, frame.Height - 35 }
+			text.LocalPosition = { 15, titleFrame.Height / 2 }
 		end
 		text:parentDidResize()
 
 		local createTeamResultComponent = function(teamColor, percent)
-			local frameWidth = helpers.math.remap(percent, 0, 100, 1, 350)
+			local frameWidth = helpers.math.remap(percent, 0, 100, 1, 380)
 			local colorFrame = uikit:createFrame(teamColor)
 			colorFrame.Width = frameWidth
 			colorFrame.Height = 30
@@ -1233,7 +1548,7 @@ function uiShowGameOverScreen()
 		end
 
 		local teamResults = calculateTeamScores()
-		local gap = 35
+		local gap = 40
 		local teamFrameCount = 0
 		for key, teamResult in pairs(teamResults) do
 			local teamColor = teamToColor(teamResult[1])
@@ -1244,7 +1559,7 @@ function uiShowGameOverScreen()
 				if teamFrame then
 					local offsetY = teamFrameCount * gap
 					teamFrame.parentDidResize = function()
-						teamFrame.LocalPosition = { frame.Width / 2, frame.Height - 110 - offsetY }
+						teamFrame.LocalPosition = { frame.Width / 2, frame.Height - 70 - offsetY }
 					end
 					teamFrame:parentDidResize()
 					teamFrameCount = teamFrameCount + 1
@@ -1252,17 +1567,23 @@ function uiShowGameOverScreen()
 			end
 		end
 
-		local newGameButton = uikit:createButton("Start new game")
-		newGameButton.Width = 375
+		local newGameButton = uikit:createButton("New game")
+		newGameButton.Width = 380
 		newGameButton:setColor(Color.Blue, Color.White)
 		newGameButton:setParent(frame)
 		newGameButton.Anchor = { 0.5, 0 }
 		newGameButton.parentDidResize = function()
-			newGameButton.LocalPosition = { frame.Width / 2 - newGameButton.Width / 2, 15 }
+			newGameButton.LocalPosition = { frame.Width / 2 - newGameButton.Width / 2, 10 }
 		end
 		newGameButton:parentDidResize()
 		newGameButton.onRelease = function()
 			clientPrepareNewGame()
 		end
+
+		local totalFrameHeight = titleFrame.Height + newGameButton.Height
+		totalFrameHeight = totalFrameHeight + 10 + 10          -- top & bottom paddings
+		totalFrameHeight = totalFrameHeight + (gap * teamFrameCount) -- team results
+		totalFrameHeight = math.max(totalFrameHeight, 100)
+		frame.Height = totalFrameHeight
 	end
 end
